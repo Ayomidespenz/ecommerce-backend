@@ -4,10 +4,10 @@ import AuthService from '../services/AuthService';
 class AuthController {
   async register(req: Request, res: Response): Promise<void> {
     try {
-      const { name, email, phone, password, password_confirmation } = req.body;
+      const { name, email, phone, password, password_confirmation, role, registrationId } = req.body;
 
-      if (!name || !email || !phone || !password || !password_confirmation) {
-        res.status(400).json({ message: 'name, email, phone, password, and password_confirmation are required' });
+      if (!name || !email || !phone || !password || !password_confirmation || !role || !registrationId) {
+        res.status(400).json({ message: 'name, email, phone, password, password_confirmation, role, and registrationId are required' });
         return;
       }
 
@@ -21,7 +21,17 @@ class AuthController {
         return;
       }
 
-      const result = await AuthService.register({ name, email, phone, password, password_confirmation });
+      if (!['buyer', 'seller'].includes(role)) {
+        res.status(400).json({ message: 'Role must be either buyer or seller' });
+        return;
+      }
+
+      if (!new RegExp(`^${role}-\\d+$`).test(registrationId)) {
+        res.status(400).json({ message: `Registration ID must start with ${role}- and end with numbers` });
+        return;
+      }
+
+      const result = await AuthService.register({ name, email, phone, password, password_confirmation, role, registrationId });
       res.status(201).json({ message: 'Registration successful', ...result });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Registration failed';

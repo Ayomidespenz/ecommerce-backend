@@ -5,6 +5,8 @@ export interface UserDocument extends Document {
   email: string;
   phone: string;
   password: string;
+  role: "buyer" | "seller";
+  registrationId: string;
 }
 
 const userSchema = new Schema<UserDocument>(
@@ -37,6 +39,8 @@ const userSchema = new Schema<UserDocument>(
         message: "Password must contain at least one letter and one number.",
       },
     },
+    role: { type: String, enum: ["buyer", "seller"], required: true },
+    registrationId: { type: String, required: true, unique: true, trim: true },
   },
   { timestamps: true },
 );
