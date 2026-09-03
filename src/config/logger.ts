@@ -41,7 +41,7 @@ export class Logger {
   static getInstance(): winston.Logger {
     if (!Logger.instance) {
       Logger.instance = winston.createLogger({
-        level: process.env.LOG_LEVEL || (process.env.NODE_ENV === 'production' ? 'info' : 'warn'),
+        level: process.env.LOG_LEVEL || 'info',
         format: Logger.getFormat(),
         transports: [
           // Console transport - simple format for development

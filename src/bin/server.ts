@@ -13,7 +13,7 @@ async function startServer(): Promise<void> {
     const db = DatabaseConnection.getInstance();
     await db.connect();
 
-    const PORT = Number(process.env.PORT) || 5000;
+    const PORT = Number(process.env.PORT) || 3000;
 
     const server = httpServer.listen(PORT, () => {
       logger.info(`E-commerce backend running on port ${PORT}`);
