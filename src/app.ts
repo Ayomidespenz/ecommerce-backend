@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import { createServer } from 'http';
 
+import appRouter from './routes';
 import apiRouter from './routes/api';
 
 const app = express();
