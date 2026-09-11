@@ -3,11 +3,18 @@ import AuthService from '../services/AuthService';
 
 class AuthController {
   async register(req: Request, res: Response): Promise<void> {
-    try {
-      const { name, email, phone, password, password_confirmation, role, registrationId } = req.body;
+    console.log('Registration request:', {
+      ...req.body,
+      password: '[hidden]',
+      password_confirmation: '[hidden]',
+    });
 
-      if (!name || !email || !phone || !password || !password_confirmation || !role || !registrationId) {
-        res.status(400).json({ message: 'name, email, phone, password, password_confirmation, role, and registrationId are required' });
+    try {
+      const { name, email, phone, password, password_confirmation } = req.body;
+      const registrationId = req.body.registrationId ?? req.body.registration_id;
+
+      if (!name || !email || !phone || !password || !password_confirmation || !registrationId) {
+        res.status(400).json({ message: 'name, email, phone, password, password_confirmation, and registrationId are required' });
         return;
       }
 
@@ -21,17 +28,13 @@ class AuthController {
         return;
       }
 
-      if (!['buyer', 'seller'].includes(role)) {
-        res.status(400).json({ message: 'Role must be either buyer or seller' });
+      const normalizedRegistrationId = registrationId.trim().toLowerCase();
+      if (!/^(buyer|seller)-\d+$/.test(normalizedRegistrationId)) {
+        res.status(400).json({ message: 'Registration ID must start with buyer- or seller- and end with numbers' });
         return;
       }
 
-      if (!new RegExp(`^${role}-\\d+$`).test(registrationId)) {
-        res.status(400).json({ message: `Registration ID must start with ${role}- and end with numbers` });
-        return;
-      }
-
-      const result = await AuthService.register({ name, email, phone, password, password_confirmation, role, registrationId });
+      const result = await AuthService.register({ name, email, phone, password, password_confirmation, registrationId: normalizedRegistrationId });
       res.status(201).json({ message: 'Registration successful', ...result });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Registration failed';

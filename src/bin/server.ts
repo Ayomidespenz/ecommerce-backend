@@ -15,7 +15,7 @@ async function startServer(): Promise<void> {
   try {
     await db.connect();
 
-    const PORT = Number(process.env.PORT) || 3000;
+    const PORT = Number(process.env.PORT) || 5000;
     logger.info('MongoDB connection established');
   } catch (error) {
     logger.warn('MongoDB not available, continuing without DB connection for local startup');
