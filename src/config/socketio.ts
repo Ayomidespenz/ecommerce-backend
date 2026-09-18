@@ -1,196 +1,158 @@
-import { Server as HTTPServer } from 'http';
-import { Server as SocketIOServer, Socket } from 'socket.io';
-import { Logger } from './logger.js';
-import env from './environment.js';
-import { socketAuthMiddleware } from '../middleware/socketAuth.js';
+import { Server as HTTPServer } from "http";
+import { Server as SocketIOServer, Socket } from "socket.io";
+import mongoose from "mongoose";
+import { Logger } from "./logger";
+import { socketAuthMiddleware, SocketAuthUser } from "../middleware/socketAuth";
+import ConversationParticipant from "../models/ConversationParticipant";
+import MessagingService from "../services/MessagingService";
 
 const logger = Logger.getInstance();
 
-/**
- * Socket.io Configuration
- * Handles real-time chat messaging with JWT authentication
- */
-
-interface AuthenticatedSocket extends Socket {
+export interface AuthenticatedSocket extends Socket {
   userId?: string;
   conversationId?: string;
   isConnected?: boolean;
+  data: {
+    user?: SocketAuthUser;
+    userId?: string;
+    [key: string]: unknown;
+  };
 }
+
+type Ack = (payload: Record<string, unknown>) => void;
 
 class SocketIOConfig {
   private static instance: SocketIOServer | null = null;
 
-  /**
-   * Initialize Socket.io server with HTTP server
-   */
   static initialize(httpServer: HTTPServer): SocketIOServer {
-    if (SocketIOConfig.instance) {
-      return SocketIOConfig.instance;
-    }
+    if (SocketIOConfig.instance) return SocketIOConfig.instance;
 
     const io = new SocketIOServer(httpServer, {
       cors: {
-        origin: env.get('FRONTEND_URL') || 'http://localhost:3000',
+        origin: process.env.FRONTEND_URL || process.env.CORS_ORIGIN || "http://localhost:3000",
         credentials: true,
-        methods: ['GET', 'POST'],
+        methods: ["GET", "POST", "PATCH", "DELETE"],
       },
-      transports: ['websocket', 'polling'],
-      pingInterval: 30000, // 30 seconds
-      pingTimeout: 60000, // 60 seconds
+      transports: ["websocket", "polling"],
+      pingInterval: 30000,
+      pingTimeout: 60000,
     });
 
-    // Authentication middleware
     io.use(socketAuthMiddleware);
 
-    // Connection handler
-    io.on('connection', (socket: AuthenticatedSocket) => {
-      logger.info('User connected to chat', {
-        userId: socket.userId,
-        socketId: socket.id,
-      });
-
+    io.on("connection", (socket: AuthenticatedSocket) => {
+      const userId = socket.data.userId;
+      socket.userId = userId;
       socket.isConnected = true;
+      if (userId) socket.join(`user_${userId}`);
 
-      // Join conversation room
-      socket.on('join_conversation', (conversationId: string) => {
-        if (!socket.userId) {
-          socket.emit('error', 'User not authenticated');
-          return;
+      logger.info("User connected to chat", { userId, socketId: socket.id });
+
+      socket.on("join_conversation", async (conversationId: string, ack?: Ack) => {
+        try {
+          if (!userId || !mongoose.Types.ObjectId.isValid(conversationId)) {
+            throw new Error("Invalid conversation");
+          }
+          const participant = await ConversationParticipant.findOne({
+            conversation: conversationId,
+            user: userId,
+          }).select("_id");
+          if (!participant) throw new Error("You are not a participant in this conversation");
+
+          socket.join(`conversation_${conversationId}`);
+          socket.conversationId = conversationId;
+          socket.to(`conversation_${conversationId}`).emit("user_online", {
+            user_id: userId,
+            conversation_id: conversationId,
+            timestamp: new Date(),
+          });
+          ack?.({ ok: true, conversation_id: conversationId });
+        } catch (error) {
+          ack?.({ ok: false, error: error instanceof Error ? error.message : "Unable to join conversation" });
         }
-
-        socket.conversationId = conversationId;
-        const roomName = `conversation_${conversationId}`;
-        socket.join(roomName);
-
-        logger.debug('User joined conversation', {
-          userId: socket.userId,
-          conversationId,
-          room: roomName,
-        });
-
-        // Notify other user in conversation that user is online
-        socket.to(roomName).emit('user_online', {
-          userId: socket.userId,
-          timestamp: new Date(),
-        });
       });
 
-      // Leave conversation room
-      socket.on('leave_conversation', (conversationId: string) => {
-        const roomName = `conversation_${conversationId}`;
-        socket.leave(roomName);
-
-        logger.debug('User left conversation', {
-          userId: socket.userId,
-          conversationId,
-          room: roomName,
-        });
-
-        // Notify other user that user is offline
-        socket.to(roomName).emit('user_offline', {
-          userId: socket.userId,
-          timestamp: new Date(),
-        });
+      socket.on("leave_conversation", (conversationId: string, ack?: Ack) => {
+        socket.leave(`conversation_${conversationId}`);
+        if (socket.conversationId === conversationId) socket.conversationId = undefined;
+        ack?.({ ok: true, conversation_id: conversationId });
       });
 
-      // Typing indicator
-      socket.on('typing', (conversationId: string) => {
-        if (!socket.userId) return;
-
-        const roomName = `conversation_${conversationId}`;
-        socket.to(roomName).emit('user_typing', {
-          userId: socket.userId,
-          conversationId,
-          timestamp: new Date(),
-        });
-
-        logger.debug('User typing', { userId: socket.userId, conversationId });
+      socket.on("send_message", async (payload: any, ack?: Ack) => {
+        try {
+          const conversationId = payload?.conversation_id || payload?.conversationId;
+          const body = typeof payload?.body === "string" ? payload.body.trim() : "";
+          if (!userId || !mongoose.Types.ObjectId.isValid(conversationId) || !body) {
+            throw new Error("conversation_id and body are required");
+          }
+          const message = await MessagingService.sendMessage(userId, conversationId, body);
+          SocketIOConfig.emitMessageToConversation(conversationId, "message:new", message);
+          ack?.({ ok: true, message });
+        } catch (error) {
+          ack?.({ ok: false, error: error instanceof Error ? error.message : "Unable to send message" });
+        }
       });
 
-      // Stop typing
-      socket.on('stop_typing', (conversationId: string) => {
-        if (!socket.userId) return;
-
-        const roomName = `conversation_${conversationId}`;
-        socket.to(roomName).emit('user_stop_typing', {
-          userId: socket.userId,
-          conversationId,
-          timestamp: new Date(),
-        });
+      socket.on("mark_read", async (payload: any, ack?: Ack) => {
+        try {
+          const conversationId = payload?.conversation_id || payload?.conversationId;
+          const messageId = payload?.message_id || payload?.messageId;
+          if (!userId || !mongoose.Types.ObjectId.isValid(conversationId)) throw new Error("Invalid conversation");
+          const result = await MessagingService.markRead(userId, conversationId, messageId);
+          SocketIOConfig.emitMessageToConversation(conversationId, "conversation:read", {
+            ...result,
+            user_id: userId,
+          });
+          ack?.({ ok: true, ...result });
+        } catch (error) {
+          ack?.({ ok: false, error: error instanceof Error ? error.message : "Unable to mark messages read" });
+        }
       });
 
-      // Disconnect handler
-      socket.on('disconnect', () => {
-        logger.info('User disconnected from chat', {
-          userId: socket.userId,
-          socketId: socket.id,
-        });
-
-        socket.isConnected = false;
-
-        // Notify other users
-        if (socket.conversationId) {
-          const roomName = `conversation_${socket.conversationId}`;
-          socket.to(roomName).emit('user_offline', {
-            userId: socket.userId,
+      const typing = async (conversationId: string, event: string) => {
+        if (!userId || !mongoose.Types.ObjectId.isValid(conversationId)) return;
+        const participant = await ConversationParticipant.exists({ conversation: conversationId, user: userId });
+        if (participant) {
+          socket.to(`conversation_${conversationId}`).emit(event, {
+            user_id: userId,
+            conversation_id: conversationId,
             timestamp: new Date(),
           });
         }
-      });
+      };
 
-      // Error handler
-      socket.on('error', (error) => {
-        logger.error('Socket error', {
-          userId: socket.userId,
-          error: error instanceof Error ? error.message : String(error),
-        });
+      socket.on("typing", (conversationId: string) => void typing(conversationId, "user_typing"));
+      socket.on("stop_typing", (conversationId: string) => void typing(conversationId, "user_stop_typing"));
+
+      socket.on("disconnect", () => {
+        socket.isConnected = false;
+        if (socket.conversationId && userId) {
+          socket.to(`conversation_${socket.conversationId}`).emit("user_offline", {
+            user_id: userId,
+            conversation_id: socket.conversationId,
+            timestamp: new Date(),
+          });
+        }
+        logger.info("User disconnected from chat", { userId, socketId: socket.id });
       });
     });
 
     SocketIOConfig.instance = io;
-    logger.info('Socket.io initialized successfully');
-
+    logger.info("Socket.io initialized successfully");
     return io;
   }
 
-  /**
-   * Get Socket.io instance
-   */
   static getInstance(): SocketIOServer | null {
     return SocketIOConfig.instance;
   }
 
-  /**
-   * Emit message to conversation room
-   */
-  static emitMessageToConversation(
-    conversationId: string,
-    event: string,
-    data: any
-  ): void {
-    const io = SocketIOConfig.instance;
-    if (io) {
-      const roomName = `conversation_${conversationId}`;
-      io.to(roomName).emit(event, data);
-      logger.debug('Event emitted to conversation', {
-        conversationId,
-        event,
-        roomName,
-      });
-    }
+  static emitMessageToConversation(conversationId: string, event: string, data: unknown): void {
+    SocketIOConfig.instance?.to(`conversation_${conversationId}`).emit(event, data);
   }
 
-  /**
-   * Emit message to specific user
-   */
-  static emitMessageToUser(userId: string, event: string, data: any): void {
-    const io = SocketIOConfig.instance;
-    if (io) {
-      const roomName = `user_${userId}`;
-      io.to(roomName).emit(event, data);
-      logger.debug('Event emitted to user', { userId, event, roomName });
-    }
+  static emitMessageToUser(userId: string, event: string, data: unknown): void {
+    SocketIOConfig.instance?.to(`user_${userId}`).emit(event, data);
   }
 }
 
-export { SocketIOConfig, AuthenticatedSocket };
+export { SocketIOConfig };

@@ -5,6 +5,7 @@ dotenv.config();
 import { httpServer } from '../app';
 import { DatabaseConnection } from '../config/database';
 import { Logger } from '../config/logger';
+import { SocketIOConfig } from '../config/socketio';
 
 const logger = Logger.getInstance();
 
@@ -21,6 +22,8 @@ async function startServer(): Promise<void> {
     logger.warn('MongoDB not available, continuing without DB connection for local startup');
     logger.warn(String(error));
   }
+
+  SocketIOConfig.initialize(httpServer);
 
   const server = httpServer.listen(PORT, () => {
     logger.info(`E-commerce backend running on port ${PORT}`);
