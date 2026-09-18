@@ -12,35 +12,24 @@ export class DatabaseConnection {
     if (!DatabaseConnection.instance) {
       DatabaseConnection.instance = new DatabaseConnection();
     }
+
     return DatabaseConnection.instance;
   }
 
   async connect(): Promise<void> {
     try {
-      let mongoUri = process.env.MONGODB_URI;
+      const mongoUri = process.env.MONGODB_URI;
 
       if (!mongoUri) {
         throw new Error('MONGODB_URI environment variable is not set');
       }
 
-      // Add only tlsAllowInvalidCertificates to the connection string
-      if (!mongoUri.includes('?')) {
-        mongoUri += '?tlsAllowInvalidCertificates=true';
-      } else if (!mongoUri.includes('tlsAllowInvalidCertificates')) {
-        mongoUri += '&tlsAllowInvalidCertificates=true';
-      }
+      logger.info('Connecting to MongoDB...');
 
-      const mongoOptions = {};
+      await mongoose.connect(mongoUri);
 
-      await mongoose.connect(mongoUri, mongoOptions as any);
+      logger.info('MongoDB connected successfully');
 
-      logger.debug('MongoDB connected', {
-        uri: mongoUri.replace(/:[^:]*@/, ':****@').replace(/tlsAllowInvalidCertificates.*/, '***'),
-      });
-
-      logger.info('✔ App connected to database successfully!!!');
-
-      // Connection event handlers
       mongoose.connection.on('error', (error) => {
         logger.error('MongoDB connection error', error);
       });
@@ -48,6 +37,7 @@ export class DatabaseConnection {
       mongoose.connection.on('disconnected', () => {
         logger.warn('MongoDB disconnected');
       });
+
     } catch (error) {
       logger.error('Failed to connect to MongoDB', error);
       throw error;
@@ -70,4 +60,3 @@ export class DatabaseConnection {
 }
 
 export default DatabaseConnection.getInstance();
-
